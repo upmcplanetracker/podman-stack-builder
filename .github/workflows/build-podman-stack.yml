@@ -50,9 +50,11 @@ jobs:
         run: |
           set -euo pipefail
           
-          # Use git ls-remote to completely bypass GitHub REST API rate limits
+          # Use git ls-remote to bypass GitHub REST API rate limits
+          # Filter out '^{}' dereference lines so we get clean tag names
           RAW_TAG=$(git ls-remote --tags --sort='-v:refname' \
             "https://github.com/${{ matrix.repo }}.git" | \
+            grep -v '\^{}$' | \
             awk '{print $2}' | sed 's|refs/tags/||' | \
             grep -E '^v?[0-9]+\.[0-9]+' | head -n1)
           
@@ -125,5 +127,5 @@ jobs:
       - name: Upload .deb Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-deb
+          name: ${{ matrix.package }}.deb
           path: build_dir/*.deb
