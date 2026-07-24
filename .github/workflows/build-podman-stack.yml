@@ -91,7 +91,13 @@ jobs:
             exit 1
           fi
           
-          VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
+          # Sanitize version for Debian: underscores are illegal, replace with dots
+          if [ "${{ matrix.package }}" = "passt" ]; then
+            VERSION=$(echo "$RAW_TAG" | tr '_' '.')
+          else
+            VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
+          fi
+          
           RELEASE_TAG="${{ matrix.package }}-${VERSION}"
           
           echo "tag=$RAW_TAG" >> $GITHUB_ENV
