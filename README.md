@@ -1,6 +1,6 @@
 # Daily Podman Stack Builder
 
-A GitHub Actions workflow that automatically compiles the latest upstream releases of the [Podman](https://podman.io) container stack into native `.deb` packages for **Ubuntu 26.04**.
+A GitHub Actions workflow that automatically compiles the latest upstream releases of the [Podman](https://podman.io) container stack into native `.deb` packages for amd64 **Ubuntu 26.04**.
 
 ## What It Builds
 
