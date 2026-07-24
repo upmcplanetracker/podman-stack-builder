@@ -2,19 +2,17 @@ name: Daily Podman Stack Builder
 
 on:
   schedule:
-    # Runs at 08:00 UTC (4 AM EST) every day
     - cron: '0 8 * * *'
-  workflow_dispatch: # Allows you to manually click "Run workflow"
+  workflow_dispatch:
 
 jobs:
   build-debs:
     runs-on: ubuntu-latest
     container:
-      # Compiles inside 26.04 to perfectly match your environment
       image: ubuntu:26.04
       
     strategy:
-      fail-fast: false # If one package fails, keep building the others
+      fail-fast: false
       matrix:
         include:
           - package: podman
@@ -45,33 +43,24 @@ jobs:
             go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
             libdevmapper-dev libjson-c-dev libapparmor-dev
           
-          # Install FPM (Effing Package Manager) to easily generate .deb files
           gem install fpm
 
-      - name: Fetch Latest GitHub Release Tag
+      - name: Fetch Latest Git Tag
         id: fetch_tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           
-          # Fetch the latest release tag from the GitHub API (authenticated to avoid rate limits)
-          RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/${{ matrix.repo }}/releases/latest" | jq -r .tag_name)
+          # Use git ls-remote to completely bypass GitHub REST API rate limits
+          RAW_TAG=$(git ls-remote --tags --sort='-v:refname' \
+            "https://github.com/${{ matrix.repo }}.git" | \
+            awk '{print $2}' | sed 's|refs/tags/||' | \
+            grep -E '^v?[0-9]+\.[0-9]+' | head -n1)
           
-          # Fallback: some repos push tags without formally marking a "release"
-          if [ "$RAW_TAG" = "null" ] || [ -z "$RAW_TAG" ]; then
-            RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ matrix.repo }}/tags" | jq -r '.[0].name')
-          fi
-          
-          # Hard fail if we still couldn't get a tag (better than a cryptic jq error later)
-          if [ "$RAW_TAG" = "null" ] || [ -z "$RAW_TAG" ]; then
-            echo "ERROR: Could not determine latest tag for ${{ matrix.repo }}" >&2
+          if [ -z "$RAW_TAG" ]; then
+            echo "ERROR: Could not find any version tag for ${{ matrix.repo }}" >&2
             exit 1
           fi
           
-          # Strip 'v' from version string (e.g., v6.0.2 -> 6.0.2)
           VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
           
           echo "Found tag: $RAW_TAG (Version: $VERSION)"
@@ -114,19 +103,19 @@ jobs:
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
 
           elif [ "${{ matrix.package }}" = "fuse-overlayfs" ]; then
-            make PREFIX=/usr
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+            ./autogen.sh
+            ./configure --prefix=/usr
+            make
+            make install DESTDIR=$(pwd)/dest
           fi
 
       - name: Build Debian Package
         run: |
           cd build_dir
           
-          # Use --epoch 1 as a separate flag. 
-          # This creates proper Debian epoch metadata WITHOUT putting a colon in the filename.
+          # --epoch 1 keeps the colon out of the filename
           FPM_CMD="fpm -s dir -t deb -n ${{ matrix.package }} --epoch 1 -v ${{ env.version }}-0local1 -C dest"
           
-          # Define dependency relationships for Podman so APT doesn't break
           if [ "${{ matrix.package }}" = "podman" ]; then
             FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d fuse-overlayfs"
           fi
