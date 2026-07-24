@@ -5,6 +5,9 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-debs:
     runs-on: ubuntu-latest
@@ -31,27 +34,11 @@ jobs:
             repo: containers/fuse-overlayfs
 
     steps:
-      - name: Install Build Toolchain & Dependencies
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates git curl jq build-essential pkg-config \
-            ruby-rubygems ruby-dev \
-            golang rustc cargo protobuf-compiler libfuse3-dev \
-            libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
-            libglib2.0-dev libyajl-dev autoconf automake libtool \
-            go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
-            libdevmapper-dev libjson-c-dev libapparmor-dev
-          
-          gem install fpm
-
       - name: Fetch Latest Git Tag
         id: fetch_tag
         run: |
           set -euo pipefail
           
-          # Use git ls-remote to bypass GitHub REST API rate limits
-          # Filter out '^{}' dereference lines so we get clean tag names
           RAW_TAG=$(git ls-remote --tags --sort='-v:refname' \
             "https://github.com/${{ matrix.repo }}.git" | \
             grep -v '\^{}$' | \
@@ -64,16 +51,54 @@ jobs:
           fi
           
           VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
+          RELEASE_TAG="${{ matrix.package }}-${VERSION}"
           
-          echo "Found tag: $RAW_TAG (Version: $VERSION)"
           echo "tag=$RAW_TAG" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_ENV
+          echo "release_tag=$RELEASE_TAG" >> $GITHUB_ENV
+          echo "upstream=${{ matrix.repo }}" >> $GITHUB_ENV
+
+      - name: Check if Release Already Exists
+        id: check_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          echo "Checking for existing release: ${{ env.release_tag }}"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ env.release_tag }}")
+          
+          if [ "$STATUS" = "200" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "✅ Release ${{ env.release_tag }} already exists. Skipping build."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "🆕 Release ${{ env.release_tag }} not found. Proceeding with build."
+          fi
+
+      - name: Install Build Toolchain & Dependencies
+        if: steps.check_release.outputs.skip != 'true'
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates git curl jq build-essential pkg-config \
+            ruby-rubygems ruby-dev \
+            golang rustc cargo protobuf-compiler libfuse3-dev \
+            libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
+            libglib2.0-dev libyajl-dev autoconf automake libtool \
+            go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
+            libdevmapper-dev libjson-c-dev libapparmor-dev
+          gem install fpm
 
       - name: Checkout Source Code
+        if: steps.check_release.outputs.skip != 'true'
         run: |
-          git clone --branch ${{ env.tag }} --depth 1 https://github.com/${{ matrix.repo }}.git build_dir
+          git clone --branch ${{ env.tag }} --depth 1 https://github.com/${{ env.upstream }}.git build_dir
 
       - name: Compile and Install to Temporary Directory
+        if: steps.check_release.outputs.skip != 'true'
         run: |
           cd build_dir
           mkdir -p dest
@@ -91,6 +116,8 @@ jobs:
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
             
           elif [ "${{ matrix.package }}" = "crun" ]; then
+            # Patch: fix function signature mismatch in cgroup.h for newer GCC
+            sed -i 's/const cgroups_subsystem_t \*libcrun_get_cgroups_subsystems ();/const cgroups_subsystem_t *libcrun_get_cgroups_subsystems (libcrun_error_t *err);/' src/libcrun/cgroup.h
             ./autogen.sh
             ./configure --prefix=/usr
             make
@@ -112,10 +139,10 @@ jobs:
           fi
 
       - name: Build Debian Package
+        if: steps.check_release.outputs.skip != 'true'
         run: |
           cd build_dir
           
-          # --epoch 1 keeps the colon out of the filename
           FPM_CMD="fpm -s dir -t deb -n ${{ matrix.package }} --epoch 1 -v ${{ env.version }}-0local1 -C dest"
           
           if [ "${{ matrix.package }}" = "podman" ]; then
@@ -125,7 +152,31 @@ jobs:
           $FPM_CMD .
 
       - name: Upload .deb Artifacts
+        if: steps.check_release.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}.deb
+          name: ${{ matrix.package }}-${{ env.version }}.deb
           path: build_dir/*.deb
+
+      - name: Publish to GitHub Release
+        if: steps.check_release.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.release_tag }}
+          name: "${{ matrix.package }} ${{ env.version }}"
+          body: |
+            Auto-built `.deb` package for **${{ matrix.package }}** ${{ env.version }}.
+            
+            - **Upstream:** https://github.com/${{ env.upstream }}/releases/tag/${{ env.tag }}
+            - **Built on:** Ubuntu 26.04
+            
+            Install with:
+            ```bash
+            sudo dpkg -i ${{ matrix.package }}_${{ env.version }}-0local1_amd64.deb
+            # or if dependencies are missing:
+            sudo apt-get install -f
+            ```
+          files: build_dir/*.deb
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
