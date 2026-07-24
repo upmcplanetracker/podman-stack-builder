@@ -55,16 +55,13 @@ jobs:
           set -euo pipefail
           
           if [ "${{ matrix.package }}" = "crun" ]; then
-            # crun uses bare number tags (1.28, 1.27, etc.) — use GitHub API
             RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/${{ matrix.repo }}/releases/latest" | jq -r .tag_name)
-            
             if [ "$RAW_TAG" = "null" ] || [ -z "$RAW_TAG" ]; then
               RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
                 "https://api.github.com/repos/${{ matrix.repo }}/tags" | jq -r '.[0].name')
             fi
           else
-            # All other packages: git ls-remote avoids API rate limits
             RAW_TAG=$(git ls-remote --tags \
               "https://github.com/${{ matrix.repo }}.git" | \
               grep -v '\^{}$' | \
@@ -125,13 +122,15 @@ jobs:
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
             make BUILDTAGS="seccomp" PREFIX=/usr bin/skopeo
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
+            # Remove shared config files already provided by golang-github-containers-common
+            # to avoid dpkg file conflicts on install
+            rm -rf $(pwd)/dest/etc/containers
             
           elif [ "${{ matrix.package }}" = "conmon" ]; then
             make PREFIX=/usr
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
             
           elif [ "${{ matrix.package }}" = "crun" ]; then
-            # Patch: fix function signature mismatch in cgroup.h for newer GCC
             sed -i 's/const cgroups_subsystem_t \*libcrun_get_cgroups_subsystems ();/const cgroups_subsystem_t *libcrun_get_cgroups_subsystems (libcrun_error_t *err);/' src/libcrun/cgroup.h
             ./autogen.sh
             ./configure --prefix=/usr
