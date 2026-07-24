@@ -34,6 +34,19 @@ jobs:
             repo: containers/fuse-overlayfs
 
     steps:
+      - name: Install Build Toolchain & Dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates git curl jq build-essential pkg-config \
+            ruby-rubygems ruby-dev \
+            golang rustc cargo protobuf-compiler libfuse3-dev \
+            libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
+            libglib2.0-dev libyajl-dev autoconf automake libtool \
+            go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
+            libdevmapper-dev libjson-c-dev libapparmor-dev
+          gem install fpm
+
       - name: Fetch Latest Git Tag
         id: fetch_tag
         run: |
@@ -77,20 +90,6 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
             echo "🆕 Release ${{ env.release_tag }} not found. Proceeding with build."
           fi
-
-      - name: Install Build Toolchain & Dependencies
-        if: steps.check_release.outputs.skip != 'true'
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates git curl jq build-essential pkg-config \
-            ruby-rubygems ruby-dev \
-            golang rustc cargo protobuf-compiler libfuse3-dev \
-            libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
-            libglib2.0-dev libyajl-dev autoconf automake libtool \
-            go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
-            libdevmapper-dev libjson-c-dev libapparmor-dev
-          gem install fpm
 
       - name: Checkout Source Code
         if: steps.check_release.outputs.skip != 'true'
