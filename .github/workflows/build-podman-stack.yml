@@ -32,6 +32,12 @@ jobs:
             repo: containers/crun
           - package: fuse-overlayfs
             repo: containers/fuse-overlayfs
+          - package: passt
+            repo: passt.top/passt
+          - package: containers-common
+            repo: containers/common
+          - package: containers-storage
+            repo: containers/storage
 
     steps:
       - name: Install Build Toolchain & Dependencies
@@ -61,6 +67,15 @@ jobs:
               RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
                 "https://api.github.com/repos/${{ matrix.repo }}/tags" | jq -r '.[0].name')
             fi
+          
+          elif [ "${{ matrix.package }}" = "passt" ]; then
+            RAW_TAG=$(git ls-remote --tags \
+              "https://passt.top/passt/" | \
+              grep -v '\^{}$' | \
+              awk '{print $2}' | sed 's|refs/tags/||' | \
+              sort -r | \
+              head -n1)
+          
           else
             RAW_TAG=$(git ls-remote --tags \
               "https://github.com/${{ matrix.repo }}.git" | \
@@ -105,9 +120,14 @@ jobs:
           fi
 
       - name: Checkout Source Code
-        if: steps.check_release.outputs.skip != 'true'
+        if: steps.check_release.outputs.skip != 'true' && matrix.package != 'passt'
         run: |
           git clone --branch ${{ env.tag }} --depth 1 https://github.com/${{ env.upstream }}.git build_dir
+
+      - name: Checkout Source Code (passt)
+        if: steps.check_release.outputs.skip != 'true' && matrix.package == 'passt'
+        run: |
+          git clone --branch ${{ env.tag }} --depth 1 https://passt.top/passt/ build_dir
 
       - name: Compile and Install to Temporary Directory
         if: steps.check_release.outputs.skip != 'true'
@@ -122,8 +142,7 @@ jobs:
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
             make BUILDTAGS="seccomp" PREFIX=/usr bin/skopeo
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            # Remove shared config files already provided by golang-github-containers-common
-            # to avoid dpkg file conflicts on install
+            # Config files are now owned by containers-common — remove from skopeo
             rm -rf $(pwd)/dest/etc/containers
             
           elif [ "${{ matrix.package }}" = "conmon" ]; then
@@ -150,6 +169,25 @@ jobs:
             ./configure --prefix=/usr
             make
             make install DESTDIR=$(pwd)/dest
+
+          elif [ "${{ matrix.package }}" = "passt" ]; then
+            make
+            make install DESTDIR=$(pwd)/dest prefix=/usr
+            mkdir -p $(pwd)/dest/etc/apparmor.d
+            if [ -d debian/apparmor ]; then
+              cp debian/apparmor/* $(pwd)/dest/etc/apparmor.d/ 2>/dev/null || true
+            fi
+            if [ -d apparmor ]; then
+              cp apparmor/* $(pwd)/dest/etc/apparmor.d/ 2>/dev/null || true
+            fi
+
+          elif [ "${{ matrix.package }}" = "containers-common" ]; then
+            make docs
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+
+          elif [ "${{ matrix.package }}" = "containers-storage" ]; then
+            make
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
           fi
 
       - name: Build Debian Package
@@ -160,7 +198,9 @@ jobs:
           FPM_CMD="fpm -s dir -t deb -n ${{ matrix.package }} --epoch 1 -v ${{ env.version }}-0local1 -C dest"
           
           if [ "${{ matrix.package }}" = "podman" ]; then
-            FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d fuse-overlayfs"
+            FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d fuse-overlayfs -d containers-common -d containers-storage"
+          elif [ "${{ matrix.package }}" = "skopeo" ]; then
+            FPM_CMD="$FPM_CMD -d containers-common"
           fi
           
           $FPM_CMD .
