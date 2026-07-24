@@ -52,13 +52,16 @@ jobs:
         run: |
           set -euo pipefail
           
+          # Strip 'v' for sorting, then restore the original tag format
           RAW_TAG=$(git ls-remote --tags \
             "https://github.com/${{ matrix.repo }}.git" | \
             grep -v '\^{}$' | \
             awk '{print $2}' | sed 's|refs/tags/||' | \
             grep -E '^v?[0-9]+\.[0-9]+' | \
-            sort -V -r | \
-            head -n1)
+            awk '{tag=$0; sub(/^v/, "", tag); print tag "\t" $0}' | \
+            sort -t$'\t' -k1,1 -V -r | \
+            head -n1 | \
+            cut -f2)
           
           if [ -z "$RAW_TAG" ]; then
             echo "ERROR: Could not find any version tag for ${{ matrix.repo }}" >&2
