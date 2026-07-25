@@ -16,6 +16,11 @@ A GitHub Actions workflow that automatically compiles the latest upstream releas
 | `passt` | [passt.top/passt](https://passt.top/passt/) | User-mode networking for rootless containers |
 | `containers-common` | [containers/common](https://github.com/containers/common) | Shared config files (`/etc/containers/*`) |
 | `containers-storage` | [containers/storage](https://github.com/containers/storage) | Container storage library and CLI |
+| `catatonit` | [openSUSE/catatonit](https://github.com/openSUSE/catatonit) | Tiny init for containers (reaps zombie processes) |
+| `buildah` | [podman-container-tools/buildah](https://github.com/podman-container-tools/buildah) | Tool for building OCI container images |
+| `podman-compose` | [containers/podman-compose](https://github.com/containers/podman-compose) | Docker Compose compatibility for Podman |
+| `ramalama` | [containers/ramalama](https://github.com/containers/ramalama) | Local AI model runner using Podman containers |
+| `podman-tui` | [containers/podman-tui](https://github.com/containers/podman-tui) | Terminal UI for managing Podman containers |
 
 ## How It Works
 
@@ -42,7 +47,22 @@ sudo apt-get install -f
 If you're installing everything fresh, use this order so dependencies resolve correctly:
 
 ```bash
-sudo dpkg -i   containers-common_*.deb   containers-storage_*.deb   conmon_*.deb   crun_*.deb   netavark_*.deb   aardvark-dns_*.deb   fuse-overlayfs_*.deb   passt_*.deb   skopeo_*.deb   podman_*.deb
+sudo dpkg -i \
+  containers-common_*.deb \
+  containers-storage_*.deb \
+  conmon_*.deb \
+  crun_*.deb \
+  netavark_*.deb \
+  aardvark-dns_*.deb \
+  fuse-overlayfs_*.deb \
+  passt_*.deb \
+  catatonit_*.deb \
+  skopeo_*.deb \
+  buildah_*.deb \
+  podman_*.deb \
+  podman-compose_*.deb \
+  ramalama_*.deb \
+  podman-tui_*.deb
 
 sudo apt-get install -f
 ```
@@ -60,6 +80,8 @@ sudo apt-get install -f
 |---------|-----------|
 | `podman` | `conmon`, `crun`, `netavark`, `aardvark-dns`, `fuse-overlayfs`, `containers-common`, `containers-storage` |
 | `skopeo` | `containers-common` |
+| `podman-compose` | `podman` |
+| `ramalama` | `podman` |
 | Everything else | No custom dependencies declared |
 
 > **Note about `skopeo`:** The upstream `skopeo` package ships `/etc/containers/policy.json`, which conflicts with Ubuntu's `golang-github-containers-common` package. This build strips that file from `skopeo` and instead declares `containers-common` as a dependency, so the config is provided cleanly by one package.
@@ -70,7 +92,7 @@ To prevent Ubuntu's older packages from overwriting these builds on `apt upgrade
 
 ```bash
 sudo tee /etc/apt/preferences.d/podman-stack <<'EOF'
-Package: podman crun conmon netavark aardvark-dns skopeo fuse-overlayfs passt containers-common containers-storage
+Package: podman crun conmon netavark aardvark-dns skopeo fuse-overlayfs passt containers-common containers-storage catatonit buildah podman-compose ramalama podman-tui
 Pin: origin ""
 Pin-Priority: 1001
 EOF
