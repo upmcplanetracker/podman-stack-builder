@@ -38,6 +38,8 @@ jobs:
             repo: containers/common
           - package: containers-storage
             repo: containers/storage
+          - package: catatonit
+            repo: openSUSE/catatonit
 
     steps:
       - name: Install Build Toolchain & Dependencies
@@ -194,6 +196,12 @@ jobs:
           elif [ "${{ matrix.package }}" = "containers-storage" ]; then
             make
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
+
+          elif [ "${{ matrix.package }}" = "catatonit" ]; then
+            ./autogen.sh
+            ./configure --prefix=/usr
+            make
+            make install DESTDIR=$(pwd)/dest
           fi
 
       - name: Build Debian Package
