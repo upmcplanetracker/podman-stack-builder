@@ -40,6 +40,14 @@ jobs:
             repo: containers/storage
           - package: catatonit
             repo: openSUSE/catatonit
+          - package: buildah
+            repo: podman-container-tools/buildah
+          - package: podman-compose
+            repo: containers/podman-compose
+          - package: ramalama
+            repo: containers/ramalama
+          - package: podman-tui
+            repo: containers/podman-tui
 
     steps:
       - name: Install Build Toolchain & Dependencies
@@ -51,8 +59,8 @@ jobs:
             golang rustc cargo protobuf-compiler libfuse3-dev \
             libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
             libglib2.0-dev libyajl-dev autoconf automake libtool \
-            go-md2man libcap-dev python3 python3-pip libbtrfs-dev \
-            libdevmapper-dev libjson-c-dev libapparmor-dev
+            go-md2man libcap-dev python3 python3-pip python3-setuptools python3-wheel \
+            libbtrfs-dev btrfs-progs libdevmapper-dev libjson-c-dev libapparmor-dev
           gem install fpm
 
       - name: Fetch Latest Git Tag
@@ -202,6 +210,22 @@ jobs:
             ./configure --prefix=/usr
             make
             make install DESTDIR=$(pwd)/dest
+
+          elif [ "${{ matrix.package }}" = "buildah" ]; then
+            make PREFIX=/usr
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+
+          elif [ "${{ matrix.package }}" = "podman-compose" ]; then
+            pip3 install . --root=$(pwd)/dest --ignore-installed --no-compile
+
+          elif [ "${{ matrix.package }}" = "ramalama" ]; then
+            pip3 install . --root=$(pwd)/dest --ignore-installed --no-compile
+
+          elif [ "${{ matrix.package }}" = "podman-tui" ]; then
+            make binary
+            mkdir -p $(pwd)/dest/usr/bin
+            cp bin/podman-tui $(pwd)/dest/usr/bin/podman-tui
+            chmod +x $(pwd)/dest/usr/bin/podman-tui
           fi
 
       - name: Build Debian Package
@@ -215,6 +239,10 @@ jobs:
             FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d fuse-overlayfs -d containers-common -d containers-storage"
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
             FPM_CMD="$FPM_CMD -d containers-common"
+          elif [ "${{ matrix.package }}" = "podman-compose" ]; then
+            FPM_CMD="$FPM_CMD -d podman"
+          elif [ "${{ matrix.package }}" = "ramalama" ]; then
+            FPM_CMD="$FPM_CMD -d podman"
           fi
           
           $FPM_CMD .
