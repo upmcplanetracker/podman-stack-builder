@@ -1,15 +1,16 @@
-name: Daily Podman Stack Builder
+name: Build and Release Podman 5.x Suite for Ubuntu 26.04
 
 on:
   schedule:
-    - cron: '0 8 * * *'
-  workflow_dispatch:
+    - cron: '0 8 * * *'  # Runs daily at 08:00 UTC
+  workflow_dispatch:     # Allows manual trigger
 
 permissions:
-  contents: write
+  contents: write        # Required to create GitHub Releases and Tags
 
 jobs:
   build-debs:
+    name: Build ${{ matrix.package }}
     runs-on: ubuntu-latest
     container:
       image: ubuntu:26.04
@@ -17,281 +18,171 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - package: podman
-            repo: containers/podman
-          - package: netavark
-            repo: containers/netavark
-          - package: aardvark-dns
-            repo: containers/aardvark-dns
-          - package: conmon
-            repo: containers/conmon
-          - package: skopeo
-            repo: containers/skopeo
-          - package: crun
-            repo: containers/crun
-          - package: fuse-overlayfs
-            repo: containers/fuse-overlayfs
-          - package: passt
-            repo: passt.top/passt
-          - package: containers-common
-            repo: containers/common
-          - package: containers-storage
-            repo: containers/storage
-          - package: catatonit
-            repo: openSUSE/catatonit
-          - package: buildah
-            repo: podman-container-tools/buildah
-          - package: podman-compose
-            repo: containers/podman-compose
-          - package: ramalama
-            repo: containers/ramalama
-          - package: podman-tui
-            repo: containers/podman-tui
+        package:
+          - podman
+          - buildah
+          - skopeo
+          - crun
+          - conmon
+          - netavark
+          - aardvark-dns
+          - cni-plugins
+          - containers-common
+          - podman-compose
+          - podman-tui
+          - passt
+          - slirp4netns
+          - composefs
+          - ramalama
 
     steps:
       - name: Install Build Toolchain & Dependencies
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates git curl jq build-essential pkg-config \
-            ruby-rubygems ruby-dev \
-            golang rustc cargo protobuf-compiler libfuse3-dev \
-            libseccomp-dev libgpgme-dev libbpf-dev libsystemd-dev \
-            libglib2.0-dev libyajl-dev autoconf automake libtool \
-            go-md2man libcap-dev python3 python3-pip python3-setuptools python3-wheel \
-            libbtrfs-dev btrfs-progs libdevmapper-dev libjson-c-dev libapparmor-dev
-          gem install fpm
+            git curl wget jq build-essential pkg-config libsystemd-dev libglib2.0-dev libseccomp-dev \
+            libapparmor-dev libdevmapper-dev libbtrfs-dev libgpgme-dev libyajl-dev libfuse3-dev \
+            go-md2man iptables uidmap ruby ruby-dev libcap-dev libslirp-dev \
+            python3-pip python3-setuptools python3-wheel python3-build python3-installer \
+            golang cargo rustc meson ninja-build m4 automake autoconf libtool libssl-dev
+          
+          gem install fpm --no-document
 
       - name: Fetch Latest Git Tag
         id: fetch_tag
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
+          REPO_URL="https://github.com/containers/${{ matrix.package }}.git"
           
-          if [ "${{ matrix.package }}" = "crun" ]; then
-            RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ matrix.repo }}/releases/latest" | jq -r .tag_name)
-            if [ "$RAW_TAG" = "null" ] || [ -z "$RAW_TAG" ]; then
-              RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${{ matrix.repo }}/tags" | jq -r '.[0].name')
-            fi
+          # Overrides for tools not in the main containers org
+          case "${{ matrix.package }}" in
+            cni-plugins)       REPO_URL="https://github.com/containernetworking/plugins.git" ;;
+            passt)             REPO_URL="https://passt.top/passt" ;;
+            slirp4netns)       REPO_URL="https://github.com/rootless-containers/slirp4netns.git" ;;
+          esac
           
-          elif [ "${{ matrix.package }}" = "passt" ]; then
-            RAW_TAG=$(git ls-remote --tags \
-              "https://passt.top/passt/" | \
-              grep -v '\^{}$' | \
-              awk '{print $2}' | sed 's|refs/tags/||' | \
-              sort -r | \
-              head -n1)
-          
+          # Fetch tags via git (bypasses GitHub API rate limits), ignoring release candidates/alphas
+          if [ "${{ matrix.package }}" = "passt" ]; then
+            RAW_TAG=$(git ls-remote --tags "$REPO_URL" | grep -v '\^{}$' | awk -F/ '{print $3}' | sort -r | head -n1)
           else
-            RAW_TAG=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ matrix.repo }}/releases/latest" | jq -r '.tag_name // empty')
-            if [ -z "$RAW_TAG" ] || [ "$RAW_TAG" = "null" ]; then
-              RAW_TAG=$(git ls-remote --tags \
-                "https://github.com/${{ matrix.repo }}.git" | \
-                grep -v '\^{}$' | \
-                awk '{print $2}' | sed 's|refs/tags/||' | \
-                grep -E '^v?[0-9]+\.[0-9]+' | \
-                grep -Ev -- '-(rc|alpha|beta|pre|dev|test|snapshot|git)' | \
-                sort -V -r | \
-                head -n1)
-            fi
+            RAW_TAG=$(git ls-remote --tags --refs "$REPO_URL" | grep -v '\^{}$' | awk -F/ '{print $3}' | grep -i -v -E 'rc|beta|alpha' | sort -V | tail -n1)
           fi
           
-          if [ -z "$RAW_TAG" ] || [ "$RAW_TAG" = "null" ]; then
-            echo "ERROR: Could not find any version tag for ${{ matrix.repo }}" >&2
+          if [ -z "$RAW_TAG" ]; then
+            echo "Failed to fetch tag for ${{ matrix.package }}"
             exit 1
           fi
           
-          # Sanitize version for Debian: underscores are illegal, replace with dots
-          if [ "${{ matrix.package }}" = "passt" ]; then
-            VERSION=$(echo "$RAW_TAG" | tr '_' '.')
-          else
-            VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
-          fi
+          echo "Raw tag found: $RAW_TAG"
+          CLEAN_VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
           
-          RELEASE_TAG="${{ matrix.package }}-${VERSION}"
-          
+          echo "version=$CLEAN_VERSION" >> $GITHUB_ENV
           echo "tag=$RAW_TAG" >> $GITHUB_ENV
-          echo "version=$VERSION" >> $GITHUB_ENV
-          echo "release_tag=$RELEASE_TAG" >> $GITHUB_ENV
-          echo "upstream=${{ matrix.repo }}" >> $GITHUB_ENV
+          echo "repo_url=$REPO_URL" >> $GITHUB_ENV
 
-      - name: Check if Release Already Exists
+      - name: Check if Release Exists
         id: check_release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -euo pipefail
-          
-          echo "Checking for existing release: ${{ env.release_tag }}"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ env.release_tag }}")
-          
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ matrix.package }}-${{ env.version }})
           if [ "$STATUS" = "200" ]; then
+            echo "Release already exists. Skipping build."
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "✅ Release ${{ env.release_tag }} already exists. Skipping build."
           else
             echo "skip=false" >> $GITHUB_OUTPUT
-            echo "🆕 Release ${{ env.release_tag }} not found. Proceeding with build."
           fi
 
-      - name: Checkout Source Code
-        if: steps.check_release.outputs.skip != 'true' && matrix.package != 'passt'
+      - name: Clone Repository
+        if: steps.check_release.outputs.skip != 'true'
         run: |
-          git clone --branch ${{ env.tag }} --depth 1 https://github.com/${{ env.upstream }}.git build_dir
-
-      - name: Checkout Source Code (passt)
-        if: steps.check_release.outputs.skip != 'true' && matrix.package == 'passt'
-        run: |
-          git clone --branch ${{ env.tag }} --depth 1 https://passt.top/passt/ build_dir
+          # --recursive prevents missing submodule build errors (crucial for crun)
+          git clone --recursive --branch ${{ env.tag }} ${{ env.repo_url }} build_dir
 
       - name: Compile and Install to Temporary Directory
         if: steps.check_release.outputs.skip != 'true'
         run: |
+          # Bypass Ubuntu 24/26 PEP 668 restriction preventing pip installations
+          export PIP_BREAK_SYSTEM_PACKAGES=1
+          
           cd build_dir
           mkdir -p dest
           
           if [ "${{ matrix.package }}" = "podman" ]; then
             make BUILDTAGS="seccomp systemd apparmor" PREFIX=/usr
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            
+          elif [ "${{ matrix.package }}" = "buildah" ]; then
+            make BUILDTAGS="seccomp apparmor" PREFIX=/usr
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
-            make BUILDTAGS="seccomp" PREFIX=/usr bin/skopeo
+            make BUILDTAGS="seccomp" bin/skopeo
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            rm -rf $(pwd)/dest/etc/containers
-            
-          elif [ "${{ matrix.package }}" = "conmon" ]; then
-            make PREFIX=/usr
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            
           elif [ "${{ matrix.package }}" = "crun" ]; then
-            sed -i 's/const cgroups_subsystem_t \*libcrun_get_cgroups_subsystems ();/const cgroups_subsystem_t *libcrun_get_cgroups_subsystems (libcrun_error_t *err);/' src/libcrun/cgroup.h
             ./autogen.sh
             ./configure --prefix=/usr
             make
             make install DESTDIR=$(pwd)/dest
-            
-          elif [ "${{ matrix.package }}" = "netavark" ]; then
-            make PREFIX=/usr
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            mkdir -p $(pwd)/dest/usr/bin
-            ln -sf /usr/libexec/podman/netavark $(pwd)/dest/usr/bin/netavark
-            
-          elif [ "${{ matrix.package }}" = "aardvark-dns" ]; then
-            make PREFIX=/usr
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            mkdir -p $(pwd)/dest/usr/bin
-            ln -sf /usr/libexec/podman/aardvark-dns $(pwd)/dest/usr/bin/aardvark-dns
-
-          elif [ "${{ matrix.package }}" = "fuse-overlayfs" ]; then
-            ./autogen.sh
-            ./configure --prefix=/usr
+          elif [ "${{ matrix.package }}" = "conmon" ]; then
             make
-            make install DESTDIR=$(pwd)/dest
-
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+          elif [ "${{ matrix.package }}" = "netavark" ] || [ "${{ matrix.package }}" = "aardvark-dns" ]; then
+            make
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+          elif [ "${{ matrix.package }}" = "cni-plugins" ]; then
+            ./build_linux.sh
+            mkdir -p dest/opt/cni/bin
+            cp bin/* dest/opt/cni/bin/
+          elif [ "${{ matrix.package }}" = "containers-common" ]; then
+            make
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
+          elif [ "${{ matrix.package }}" = "podman-compose" ]; then
+            pip3 install . --root=$(pwd)/dest --prefix=/usr --ignore-installed --no-compile
+          elif [ "${{ matrix.package }}" = "podman-tui" ]; then
+            make
+            mkdir -p dest/usr/bin
+            cp bin/podman-tui dest/usr/bin/
           elif [ "${{ matrix.package }}" = "passt" ]; then
             make
-            make install DESTDIR=$(pwd)/dest prefix=/usr
-            
-            mkdir -p $(pwd)/dest/etc/apparmor.d
-            if [ -f contrib/apparmor/usr.bin.pasta ]; then
-              cp contrib/apparmor/usr.bin.pasta $(pwd)/dest/etc/apparmor.d/
-            fi
-
-            cat << 'EOF' > postinst
-#!/bin/sh
-set -e
-if [ -f /etc/apparmor.d/usr.bin.pasta ] && command -v apparmor_parser >/dev/null 2>&1; then
-    apparmor_parser -r /etc/apparmor.d/usr.bin.pasta 2>/dev/null || true
-fi
-EOF
-            chmod +x postinst
-
-          elif [ "${{ matrix.package }}" = "containers-common" ]; then
-            make docs
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-
-          elif [ "${{ matrix.package }}" = "containers-storage" ]; then
-            make
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-
-          elif [ "${{ matrix.package }}" = "catatonit" ]; then
+            make install prefix=/usr DESTDIR=$(pwd)/dest
+          elif [ "${{ matrix.package }}" = "slirp4netns" ]; then
             ./autogen.sh
             ./configure --prefix=/usr
             make
             make install DESTDIR=$(pwd)/dest
-            mkdir -p $(pwd)/dest/usr/libexec/podman
-            ln -sf ../../bin/catatonit $(pwd)/dest/usr/libexec/podman/catatonit
-
-          elif [ "${{ matrix.package }}" = "buildah" ]; then
-            make PREFIX=/usr
-            make install PREFIX=/usr DESTDIR=$(pwd)/dest
-
-          elif [ "${{ matrix.package }}" = "podman-compose" ]; then
-            pip3 install . --root=$(pwd)/dest --ignore-installed --no-compile
-
+          elif [ "${{ matrix.package }}" = "composefs" ]; then
+            meson setup build --prefix=/usr
+            ninja -C build
+            DESTDIR=$(pwd)/dest ninja -C build install
           elif [ "${{ matrix.package }}" = "ramalama" ]; then
-            pip3 install . --root=$(pwd)/dest --ignore-installed --no-compile
-
-          elif [ "${{ matrix.package }}" = "podman-tui" ]; then
-            make binary
-            mkdir -p $(pwd)/dest/usr/bin
-            cp bin/podman-tui $(pwd)/dest/usr/bin/podman-tui
-            chmod +x $(pwd)/dest/usr/bin/podman-tui
+            make
+            make install PREFIX=/usr DESTDIR=$(pwd)/dest
           fi
 
-      - name: Build Debian Package
+      - name: Build .deb Package
         if: steps.check_release.outputs.skip != 'true'
         run: |
-          cd build_dir
+          cd build_dir/dest
           
-          FPM_CMD="fpm -s dir -t deb -n ${{ matrix.package }} --epoch 1 -v ${{ env.version }}-0local1 -C dest"
-          
-          if [ "${{ matrix.package }}" = "podman" ]; then
-            FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d passt -d fuse-overlayfs -d containers-common -d containers-storage"
-          elif [ "${{ matrix.package }}" = "passt" ]; then
-            FPM_CMD="$FPM_CMD --after-install postinst"
-          elif [ "${{ matrix.package }}" = "skopeo" ]; then
-            FPM_CMD="$FPM_CMD -d containers-common"
-          elif [ "${{ matrix.package }}" = "podman-compose" ]; then
-            FPM_CMD="$FPM_CMD -d podman"
-          elif [ "${{ matrix.package }}" = "ramalama" ]; then
-            FPM_CMD="$FPM_CMD -d podman"
-          fi
-          
-          $FPM_CMD .
+          # By using `*` inside the `dest` directory, FPM will strictly only package
+          # folders that were successfully generated, preventing "File Not Found" aborts.
+          fpm -s dir -t deb \
+            -n "${{ matrix.package }}" \
+            -v "${{ env.version }}" \
+            -p "../${{ matrix.package }}-${{ env.version }}.deb" \
+            *
 
       - name: Upload .deb Artifacts
         if: steps.check_release.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package }}-${{ env.version }}.deb
+          name: ${{ matrix.package }}-${{ env.version }}
           path: build_dir/*.deb
 
-      - name: Publish to GitHub Release
+      - name: Create GitHub Release
         if: steps.check_release.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.release_tag }}
-          name: "${{ matrix.package }} ${{ env.version }}"
-          body: |
-            Auto-built `.deb` package for **${{ matrix.package }}** ${{ env.version }}.
-            
-            - **Upstream:** https://github.com/${{ env.upstream }}/releases/tag/${{ env.tag }}
-            - **Built on:** Ubuntu 26.04
-            
-            Install with:
-            ```bash
-            sudo dpkg -i ${{ matrix.package }}_${{ env.version }}-0local1_amd64.deb
-            # or if dependencies are missing:
-            sudo apt-get install -f
-            ```
+          tag_name: ${{ matrix.package }}-${{ env.version }}
+          name: ${{ matrix.package }} ${{ env.version }}
           files: build_dir/*.deb
-          make_latest: false
+          body: "Automated build of ${{ matrix.package }} version ${{ env.version }} for Ubuntu 26.04."
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
