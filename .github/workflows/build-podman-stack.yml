@@ -98,13 +98,13 @@ jobs:
         run: |
           git clone --recursive --branch ${{ env.tag }} ${{ env.repo_url }} build_dir
 
-- name: Compile and Install to Temporary Directory
+      - name: Compile and Install to Temporary Directory
         if: steps.check_release.outputs.skip != 'true'
         run: |
-          # Bypass Ubuntu 24/26 PEP 668 restriction preventing pip installations
+          # Bypass Ubuntu PEP 668 restriction preventing pip installations
           export PIP_BREAK_SYSTEM_PACKAGES=1
           
-          # Force GCC 14 to use the C17 standard instead of C23 to prevent "conflicting types ()" header errors in crun
+          # Force GCC 14 to use C17 standard instead of C23 to prevent header errors in crun
           export CFLAGS="-std=gnu17 -g -O2"
           
           cd build_dir
@@ -152,7 +152,6 @@ jobs:
             cp contrib/apparmor/usr.bin.passt $(pwd)/dest/etc/apparmor.d/
             cp contrib/apparmor/usr.bin.pasta $(pwd)/dest/etc/apparmor.d/
             cp contrib/apparmor/abstractions/passt $(pwd)/dest/etc/apparmor.d/abstractions/
-            
           elif [ "${{ matrix.package }}" = "slirp4netns" ]; then
             ./autogen.sh
             ./configure --prefix=/usr
