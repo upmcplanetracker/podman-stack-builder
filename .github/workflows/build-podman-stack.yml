@@ -42,8 +42,8 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y \
             git curl wget jq build-essential pkg-config libsystemd-dev libglib2.0-dev libseccomp-dev \
             libapparmor-dev libdevmapper-dev libbtrfs-dev libgpgme-dev libyajl-dev libfuse3-dev \
-            go-md2man iptables uidmap ruby ruby-dev libcap-dev libslirp-dev \
-            python3-pip python3-setuptools python3-wheel python3-build python3-installer \
+            go-md2man iptables uidmap ruby ruby-dev libcap-dev libslirp-dev libprotobuf-c-dev \
+            python3-pip python3-setuptools python3-wheel python3-build python3-installer python-is-python3 \
             golang cargo rustc meson ninja-build m4 automake autoconf libtool libssl-dev
           
           gem install fpm --no-document
@@ -51,16 +51,16 @@ jobs:
       - name: Fetch Latest Git Tag
         id: fetch_tag
         run: |
-          REPO_URL="https://github.com/containers/${{ matrix.package }}.git"
-          
-          # Overrides for tools not in the main containers org
+          # Route custom repo names to their actual Git URLs
           case "${{ matrix.package }}" in
             cni-plugins)       REPO_URL="https://github.com/containernetworking/plugins.git" ;;
             passt)             REPO_URL="https://passt.top/passt" ;;
             slirp4netns)       REPO_URL="https://github.com/rootless-containers/slirp4netns.git" ;;
+            containers-common) REPO_URL="https://github.com/containers/common.git" ;;
+            *)                 REPO_URL="https://github.com/containers/${{ matrix.package }}.git" ;;
           esac
           
-          # Fetch tags via git (bypasses GitHub API rate limits), ignoring release candidates/alphas
+          # Fetch tags via git, ignoring release candidates/alphas
           if [ "${{ matrix.package }}" = "passt" ]; then
             RAW_TAG=$(git ls-remote --tags "$REPO_URL" | grep -v '\^{}$' | awk -F/ '{print $3}' | sort -r | head -n1)
           else
@@ -73,7 +73,9 @@ jobs:
           fi
           
           echo "Raw tag found: $RAW_TAG"
-          CLEAN_VERSION=$(echo "$RAW_TAG" | sed 's/^v//')
+          
+          # Strip 'v' prefix and convert '_' to '.' (Crucial for Passt / Debian compliance)
+          CLEAN_VERSION=$(echo "$RAW_TAG" | sed 's/^v//' | tr '_' '.')
           
           echo "version=$CLEAN_VERSION" >> $GITHUB_ENV
           echo "tag=$RAW_TAG" >> $GITHUB_ENV
@@ -94,7 +96,6 @@ jobs:
       - name: Clone Repository
         if: steps.check_release.outputs.skip != 'true'
         run: |
-          # --recursive prevents missing submodule build errors (crucial for crun)
           git clone --recursive --branch ${{ env.tag }} ${{ env.repo_url }} build_dir
 
       - name: Compile and Install to Temporary Directory
@@ -102,6 +103,9 @@ jobs:
         run: |
           # Bypass Ubuntu 24/26 PEP 668 restriction preventing pip installations
           export PIP_BREAK_SYSTEM_PACKAGES=1
+          
+          # Force GCC 14 to use the C17 standard instead of C23 to prevent "conflicting types ()" header errors in crun
+          export CFLAGS="-std=gnu17 -g -O2"
           
           cd build_dir
           mkdir -p dest
@@ -161,8 +165,6 @@ jobs:
         run: |
           cd build_dir/dest
           
-          # By using `*` inside the `dest` directory, FPM will strictly only package
-          # folders that were successfully generated, preventing "File Not Found" aborts.
           fpm -s dir -t deb \
             -n "${{ matrix.package }}" \
             -v "${{ env.version }}" \
