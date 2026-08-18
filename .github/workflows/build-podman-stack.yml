@@ -98,7 +98,7 @@ jobs:
         run: |
           git clone --recursive --branch ${{ env.tag }} ${{ env.repo_url }} build_dir
 
-      - name: Compile and Install to Temporary Directory
+- name: Compile and Install to Temporary Directory
         if: steps.check_release.outputs.skip != 'true'
         run: |
           # Bypass Ubuntu 24/26 PEP 668 restriction preventing pip installations
@@ -146,6 +146,13 @@ jobs:
           elif [ "${{ matrix.package }}" = "passt" ]; then
             make
             make install prefix=/usr DESTDIR=$(pwd)/dest
+            
+            # Add AppArmor profiles for Ubuntu userns compatibility
+            mkdir -p $(pwd)/dest/etc/apparmor.d/abstractions
+            cp contrib/apparmor/usr.bin.passt $(pwd)/dest/etc/apparmor.d/
+            cp contrib/apparmor/usr.bin.pasta $(pwd)/dest/etc/apparmor.d/
+            cp contrib/apparmor/abstractions/passt $(pwd)/dest/etc/apparmor.d/abstractions/
+            
           elif [ "${{ matrix.package }}" = "slirp4netns" ]; then
             ./autogen.sh
             ./configure --prefix=/usr
