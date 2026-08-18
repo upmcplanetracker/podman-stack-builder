@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: ubuntu:26.04
-      
+
     strategy:
       fail-fast: false
       matrix:
@@ -200,13 +200,22 @@ jobs:
           elif [ "${{ matrix.package }}" = "passt" ]; then
             make
             make install DESTDIR=$(pwd)/dest prefix=/usr
+            
+            # Correct upstream location for pasta AppArmor profile
             mkdir -p $(pwd)/dest/etc/apparmor.d
-            if [ -d debian/apparmor ]; then
-              cp debian/apparmor/* $(pwd)/dest/etc/apparmor.d/ 2>/dev/null || true
+            if [ -f contrib/apparmor/usr.bin.pasta ]; then
+              cp contrib/apparmor/usr.bin.pasta $(pwd)/dest/etc/apparmor.d/
             fi
-            if [ -d apparmor ]; then
-              cp apparmor/* $(pwd)/dest/etc/apparmor.d/ 2>/dev/null || true
-            fi
+
+            # Script to automatically load profile into kernel on dpkg -i
+            cat << 'EOF' > postinst
+#!/bin/sh
+set -e
+if [ -f /etc/apparmor.d/usr.bin.pasta ] && command -v apparmor_parser >/dev/null 2>&1; then
+    apparmor_parser -r /etc/apparmor.d/usr.bin.pasta 2>/dev/null || true
+fi
+EOF
+            chmod +x postinst
 
           elif [ "${{ matrix.package }}" = "containers-common" ]; then
             make docs
@@ -250,7 +259,9 @@ jobs:
           FPM_CMD="fpm -s dir -t deb -n ${{ matrix.package }} --epoch 1 -v ${{ env.version }}-0local1 -C dest"
           
           if [ "${{ matrix.package }}" = "podman" ]; then
-            FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d fuse-overlayfs -d containers-common -d containers-storage"
+            FPM_CMD="$FPM_CMD -d conmon -d crun -d netavark -d aardvark-dns -d passt -d fuse-overlayfs -d containers-common -d containers-storage"
+          elif [ "${{ matrix.package }}" = "passt" ]; then
+            FPM_CMD="$FPM_CMD --after-install postinst"
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
             FPM_CMD="$FPM_CMD -d containers-common"
           elif [ "${{ matrix.package }}" = "podman-compose" ]; then
