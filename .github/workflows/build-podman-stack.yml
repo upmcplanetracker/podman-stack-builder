@@ -163,7 +163,6 @@ jobs:
           elif [ "${{ matrix.package }}" = "skopeo" ]; then
             make BUILDTAGS="seccomp" PREFIX=/usr bin/skopeo
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            # Config files are now owned by containers-common — remove from skopeo
             rm -rf $(pwd)/dest/etc/containers
             
           elif [ "${{ matrix.package }}" = "conmon" ]; then
@@ -180,14 +179,12 @@ jobs:
           elif [ "${{ matrix.package }}" = "netavark" ]; then
             make PREFIX=/usr
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            # Symlink to /usr/bin inside the deb package
             mkdir -p $(pwd)/dest/usr/bin
             ln -sf /usr/libexec/podman/netavark $(pwd)/dest/usr/bin/netavark
             
           elif [ "${{ matrix.package }}" = "aardvark-dns" ]; then
             make PREFIX=/usr
             make install PREFIX=/usr DESTDIR=$(pwd)/dest
-            # Symlink to /usr/bin inside the deb package
             mkdir -p $(pwd)/dest/usr/bin
             ln -sf /usr/libexec/podman/aardvark-dns $(pwd)/dest/usr/bin/aardvark-dns
 
@@ -201,13 +198,11 @@ jobs:
             make
             make install DESTDIR=$(pwd)/dest prefix=/usr
             
-            # Correct upstream location for pasta AppArmor profile
             mkdir -p $(pwd)/dest/etc/apparmor.d
             if [ -f contrib/apparmor/usr.bin.pasta ]; then
               cp contrib/apparmor/usr.bin.pasta $(pwd)/dest/etc/apparmor.d/
             fi
 
-            # Script to automatically load profile into kernel on dpkg -i
             cat << 'EOF' > postinst
 #!/bin/sh
 set -e
@@ -230,7 +225,6 @@ EOF
             ./configure --prefix=/usr
             make
             make install DESTDIR=$(pwd)/dest
-            # Add symlink where Podman expects it internally
             mkdir -p $(pwd)/dest/usr/libexec/podman
             ln -sf ../../bin/catatonit $(pwd)/dest/usr/libexec/podman/catatonit
 
@@ -274,14 +268,14 @@ EOF
 
       - name: Upload .deb Artifacts
         if: steps.check_release.outputs.skip != 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}-${{ env.version }}.deb
           path: build_dir/*.deb
 
       - name: Publish to GitHub Release
         if: steps.check_release.outputs.skip != 'true'
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.release_tag }}
           name: "${{ matrix.package }} ${{ env.version }}"
