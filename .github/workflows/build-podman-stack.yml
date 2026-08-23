@@ -44,6 +44,7 @@ jobs:
             libapparmor-dev libdevmapper-dev libbtrfs-dev libgpgme-dev libyajl-dev libfuse3-dev \
             go-md2man iptables uidmap ruby ruby-dev libcap-dev libslirp-dev libprotobuf-c-dev \
             python3-pip python3-setuptools python3-wheel python3-build python3-installer python-is-python3 \
+            python3-argcomplete \
             golang cargo rustc meson ninja-build m4 automake autoconf libtool libssl-dev
           
           gem install fpm --no-document
