@@ -1,4 +1,4 @@
-name: Build and Release Podman 5.x Suite for Ubuntu 26.04
+name: Build and Release Podman Suite for Ubuntu 26.04
 
 on:
   schedule:
